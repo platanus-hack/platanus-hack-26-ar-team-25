@@ -16,6 +16,7 @@ vi.mock('../client', () => ({
       updatedAt: 'progress.updatedAt',
     },
     nodes: { id: 'nodes.id', subjectId: 'nodes.subjectId' },
+    subjects: { id: 'subjects.id', userId: 'subjects.userId' },
     progressStatus: { enumValues: ['locked', 'available', 'in_progress', 'mastered'] },
   },
 }))
@@ -35,6 +36,8 @@ const mockDb = clientModule.db as unknown as {
 }
 
 describe('progress queries', () => {
+  const userId = '00000000-0000-4000-8000-000000000123'
+
   beforeEach(() => {
     mockDb.select.mockReset()
     mockDb.insert.mockReset()
@@ -48,7 +51,7 @@ describe('progress queries', () => {
     const from = vi.fn(() => ({ innerJoin }))
     mockDb.select.mockReturnValue({ from })
 
-    const out = await listProgressForSubject('subject-1')
+    const out = await listProgressForSubject(userId, 'subject-1')
     expect(out).toEqual(rows)
     expect(mockDb.select).toHaveBeenCalled()
     expect(from).toHaveBeenCalled()
@@ -67,7 +70,7 @@ describe('progress queries', () => {
     const from = vi.fn(() => ({ innerJoin }))
     mockDb.select.mockReturnValue({ from })
 
-    const summary = await summarizeProgressForSubject('subject-1')
+    const summary = await summarizeProgressForSubject(userId, 'subject-1')
     expect(summary).toEqual({
       total: 4,
       mastered: 2,
@@ -84,37 +87,60 @@ describe('progress queries', () => {
     const from = vi.fn(() => ({ innerJoin }))
     mockDb.select.mockReturnValue({ from })
 
-    const summary = await summarizeProgressForSubject('subject-1')
+    const summary = await summarizeProgressForSubject(userId, 'subject-1')
     expect(summary.total).toBe(0)
     expect(summary.percentMastered).toBe(0)
   })
 
   it("upsertNodeProgress sets completedAt when status is 'mastered'", async () => {
     const returning = vi.fn().mockResolvedValue([
-      { id: 'p1', userId: 'demo', nodeId: 'n1', status: 'mastered', completedAt: new Date(), updatedAt: new Date() },
+      { id: 'p1', userId, nodeId: 'n1', status: 'mastered', completedAt: new Date(), updatedAt: new Date() },
     ])
     const onConflictDoUpdate = vi.fn(() => ({ returning }))
     const values = vi.fn(() => ({ onConflictDoUpdate }))
     mockDb.insert.mockReturnValue({ values })
+    const limit = vi.fn().mockResolvedValue([{ id: 'n1' }])
+    const where = vi.fn(() => ({ limit }))
+    const innerJoin = vi.fn(() => ({ where }))
+    const from = vi.fn(() => ({ innerJoin }))
+    mockDb.select.mockReturnValue({ from })
 
-    const out = await upsertNodeProgress('n1', 'mastered')
+    const out = await upsertNodeProgress(userId, 'n1', 'mastered')
+    if (!out) throw new Error('expected progress row')
     expect(out.status).toBe('mastered')
     expect(values).toHaveBeenCalledWith(
-      expect.objectContaining({ nodeId: 'n1', status: 'mastered', completedAt: expect.any(Date) }),
+      expect.objectContaining({ userId, nodeId: 'n1', status: 'mastered', completedAt: expect.any(Date) }),
     )
   })
 
   it("upsertNodeProgress nulls completedAt when leaving 'mastered'", async () => {
     const returning = vi.fn().mockResolvedValue([
-      { id: 'p1', userId: 'demo', nodeId: 'n1', status: 'in_progress', completedAt: null, updatedAt: new Date() },
+      { id: 'p1', userId, nodeId: 'n1', status: 'in_progress', completedAt: null, updatedAt: new Date() },
     ])
     const onConflictDoUpdate = vi.fn(() => ({ returning }))
     const values = vi.fn(() => ({ onConflictDoUpdate }))
     mockDb.insert.mockReturnValue({ values })
+    const limit = vi.fn().mockResolvedValue([{ id: 'n1' }])
+    const where = vi.fn(() => ({ limit }))
+    const innerJoin = vi.fn(() => ({ where }))
+    const from = vi.fn(() => ({ innerJoin }))
+    mockDb.select.mockReturnValue({ from })
 
-    await upsertNodeProgress('n1', 'in_progress')
+    await upsertNodeProgress(userId, 'n1', 'in_progress')
     expect(values).toHaveBeenCalledWith(
-      expect.objectContaining({ nodeId: 'n1', status: 'in_progress', completedAt: null }),
+      expect.objectContaining({ userId, nodeId: 'n1', status: 'in_progress', completedAt: null }),
     )
+  })
+
+  it('upsertNodeProgress returns null when the user does not own the node', async () => {
+    const limit = vi.fn().mockResolvedValue([])
+    const where = vi.fn(() => ({ limit }))
+    const innerJoin = vi.fn(() => ({ where }))
+    const from = vi.fn(() => ({ innerJoin }))
+    mockDb.select.mockReturnValue({ from })
+
+    const out = await upsertNodeProgress(userId, 'n1', 'mastered')
+    expect(out).toBeNull()
+    expect(mockDb.insert).not.toHaveBeenCalled()
   })
 })

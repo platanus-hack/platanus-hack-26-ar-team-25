@@ -23,7 +23,7 @@ const mockDb = clientModule.db as unknown as {
 }
 
 const seed = {
-  userId: 'demo',
+  userId: '00000000-0000-4000-8000-000000000123',
   preferredFormat: 'text',
   activeHours: [],
   recurringMistakes: [],
@@ -32,6 +32,8 @@ const seed = {
 }
 
 describe('profile queries', () => {
+  const userId = seed.userId
+
   beforeEach(() => {
     mockDb.select.mockReset()
     mockDb.insert.mockReset()
@@ -44,7 +46,7 @@ describe('profile queries', () => {
     const from = vi.fn(() => ({ where }))
     mockDb.select.mockReturnValue({ from })
 
-    const out = await getProfile()
+    const out = await getProfile(userId)
     expect(out).toEqual(seed)
     expect(mockDb.insert).not.toHaveBeenCalled()
   })
@@ -59,7 +61,7 @@ describe('profile queries', () => {
     const values = vi.fn(() => ({ returning }))
     mockDb.insert.mockReturnValue({ values })
 
-    const out = await getProfile()
+    const out = await getProfile(userId)
     expect(out).toEqual(seed)
     expect(mockDb.insert).toHaveBeenCalled()
   })
@@ -75,7 +77,7 @@ describe('profile queries', () => {
     const set = vi.fn(() => ({ where: where2 }))
     mockDb.update.mockReturnValue({ set })
 
-    const out = await updateProfile({ preferredFormat: 'audio' })
+    const out = await updateProfile(userId, { preferredFormat: 'audio' })
     expect(out.preferredFormat).toBe('audio')
     expect(set).toHaveBeenCalledWith(
       expect.objectContaining({ preferredFormat: 'audio', updatedAt: expect.any(Date) }),

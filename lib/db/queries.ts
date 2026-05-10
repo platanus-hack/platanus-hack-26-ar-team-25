@@ -1,24 +1,26 @@
 import { eq, desc, and } from 'drizzle-orm'
 import { db, schema } from './client'
 
-// MVP has no auth. All server-side reads/writes use this user_id and the
-// service-role connection (bypassing RLS). Replace with real auth.uid()
-// once login is in place.
+// Server-side reads/writes use the service-role connection (bypassing RLS).
+// Callers must pass a user id returned by requireUserId(), not request input.
 export const DEMO_USER_ID = '00000000-0000-4000-8000-000000000001'
 
-export async function listSubjects() {
+export async function listSubjects(userId: string) {
   return db
     .select()
     .from(schema.subjects)
-    .where(eq(schema.subjects.userId, DEMO_USER_ID))
+    .where(eq(schema.subjects.userId, userId))
     .orderBy(desc(schema.subjects.createdAt))
 }
 
-export async function createSubject(input: { name: string; description?: string | null }) {
+export async function createSubject(
+  userId: string,
+  input: { name: string; description?: string | null },
+) {
   const [row] = await db
     .insert(schema.subjects)
     .values({
-      userId: DEMO_USER_ID,
+      userId,
       name: input.name,
       description: input.description ?? null,
     })
@@ -26,24 +28,25 @@ export async function createSubject(input: { name: string; description?: string 
   return row
 }
 
-export async function getSubject(id: string) {
+export async function getSubject(userId: string, id: string) {
   const [row] = await db
     .select()
     .from(schema.subjects)
-    .where(and(eq(schema.subjects.id, id), eq(schema.subjects.userId, DEMO_USER_ID)))
+    .where(and(eq(schema.subjects.id, id), eq(schema.subjects.userId, userId)))
     .limit(1)
   return row ?? null
 }
 
-export async function listFilesForSubject(subjectId: string) {
+export async function listFilesForSubject(userId: string, subjectId: string) {
   return db
     .select()
     .from(schema.files)
-    .where(and(eq(schema.files.subjectId, subjectId), eq(schema.files.userId, DEMO_USER_ID)))
+    .where(and(eq(schema.files.subjectId, subjectId), eq(schema.files.userId, userId)))
     .orderBy(desc(schema.files.createdAt))
 }
 
 export async function insertPendingFile(input: {
+  userId: string
   subjectId: string
   s3Key: string
   originalFilename: string
@@ -55,7 +58,7 @@ export async function insertPendingFile(input: {
     .insert(schema.files)
     .values({
       subjectId: input.subjectId,
-      userId: DEMO_USER_ID,
+      userId: input.userId,
       s3Key: input.s3Key,
       originalFilename: input.originalFilename,
       mimeType: input.mimeType,
@@ -69,7 +72,7 @@ export async function insertPendingFile(input: {
 
 // --- Progress ---
 
-export async function listProgressForSubject(subjectId: string) {
+export async function listProgressForSubject(userId: string, subjectId: string) {
   return db
     .select({
       id: schema.progress.id,
@@ -82,7 +85,7 @@ export async function listProgressForSubject(subjectId: string) {
     .innerJoin(schema.nodes, eq(schema.nodes.id, schema.progress.nodeId))
     .where(
       and(
-        eq(schema.progress.userId, DEMO_USER_ID),
+        eq(schema.progress.userId, userId),
         eq(schema.nodes.subjectId, subjectId),
       ),
     )
@@ -97,8 +100,11 @@ export interface ProgressSummary {
   percentMastered: number
 }
 
-export async function summarizeProgressForSubject(subjectId: string): Promise<ProgressSummary> {
-  const rows = await listProgressForSubject(subjectId)
+export async function summarizeProgressForSubject(
+  userId: string,
+  subjectId: string,
+): Promise<ProgressSummary> {
+  const rows = await listProgressForSubject(userId, subjectId)
   const counts = {
     total: rows.length,
     mastered: rows.filter((r) => r.status === 'mastered').length,
@@ -112,14 +118,23 @@ export async function summarizeProgressForSubject(subjectId: string): Promise<Pr
 }
 
 export async function upsertNodeProgress(
+  userId: string,
   nodeId: string,
   status: typeof schema.progressStatus.enumValues[number],
 ) {
+  const [node] = await db
+    .select({ id: schema.nodes.id })
+    .from(schema.nodes)
+    .innerJoin(schema.subjects, eq(schema.subjects.id, schema.nodes.subjectId))
+    .where(and(eq(schema.nodes.id, nodeId), eq(schema.subjects.userId, userId)))
+    .limit(1)
+  if (!node) return null
+
   const completedAt = status === 'mastered' ? new Date() : null
   const [row] = await db
     .insert(schema.progress)
     .values({
-      userId: DEMO_USER_ID,
+      userId,
       nodeId,
       status,
       completedAt,
@@ -138,34 +153,37 @@ export async function upsertNodeProgress(
 
 // --- Profile ---
 
-export async function getProfile() {
+export async function getProfile(userId: string) {
   const [row] = await db
     .select()
     .from(schema.profiles)
-    .where(eq(schema.profiles.userId, DEMO_USER_ID))
+    .where(eq(schema.profiles.userId, userId))
     .limit(1)
   if (row) return row
 
   // Auto-seed the singleton on first read.
   const [seed] = await db
     .insert(schema.profiles)
-    .values({ userId: DEMO_USER_ID })
+    .values({ userId })
     .returning()
   return seed
 }
 
-export async function updateProfile(input: {
-  preferredFormat?: typeof schema.preferredFormat.enumValues[number]
-  activeHours?: string[]
-  recurringMistakes?: string[]
-  averageFriction?: number
-}) {
+export async function updateProfile(
+  userId: string,
+  input: {
+    preferredFormat?: typeof schema.preferredFormat.enumValues[number]
+    activeHours?: string[]
+    recurringMistakes?: string[]
+    averageFriction?: number
+  },
+) {
   // Ensure singleton exists
-  await getProfile()
+  await getProfile(userId)
   const [row] = await db
     .update(schema.profiles)
     .set({ ...input, updatedAt: new Date() })
-    .where(eq(schema.profiles.userId, DEMO_USER_ID))
+    .where(eq(schema.profiles.userId, userId))
     .returning()
   return row
 }
